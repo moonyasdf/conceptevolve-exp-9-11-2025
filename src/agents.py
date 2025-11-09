@@ -12,7 +12,7 @@ loop.
 
 import contextlib
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from omegaconf import DictConfig
 from src.concepts import (
     AlgorithmicConcept,

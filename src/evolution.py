@@ -512,18 +512,18 @@ class ConceptEvolution:
         ):
             current_concept.draft_history.append(current_concept.description)
 
-        retries = getattr(self.cfg.evolution, "verification_retries", 1)
+        configured_retries = getattr(self.cfg.evolution, "verification_retries", 1)
         try:
-            total_rounds = max(1, int(retries))
+            retry_limit = max(1, int(configured_retries))
         except (TypeError, ValueError):
             logger.warning(
                 "Invalid value for evolution.verification_retries (%s). Falling back to 1 round.",
-                retries,
+                configured_retries,
             )
-            total_rounds = 1
+            retry_limit = 1
 
-        for i in range(total_rounds):
-            print(f"  🕵️ Verification Round {i + 1}/{total_rounds}...")
+        for i in range(retry_limit):
+            print(f"  🕵️ Verification Round {i + 1}/{retry_limit}...")
 
             report = self.verifier.verify(
                 concept=current_concept,

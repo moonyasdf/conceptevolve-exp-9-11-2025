@@ -72,6 +72,11 @@ class StubConceptDatabase:
     def sample(self):
         return (self._concepts[0] if self._concepts else None, [], [])
 
+    def get_max_generation(self) -> int:
+        if not self._concepts:
+            return 0
+        return max(concept.generation for concept in self._concepts)
+
     def close(self) -> None:
         return None
 
@@ -275,7 +280,7 @@ def test_evaluate_population_recomputes_invalid_scores(monkeypatch, tmp_path):
 
     call_counter = {"count": 0}
 
-    def fake_eval(self, concept, persist=True):
+    def fake_eval(self, concept, persist=True, persist_embedding=True):
         call_counter["count"] += 1
         concept.scores = ConceptScores(
             novelty=5.0, potential=5.0, sophistication=5.0, feasibility=5.0
