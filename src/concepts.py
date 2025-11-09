@@ -59,14 +59,13 @@ class VerificationReport(BaseModel):
 
     round_index: int = Field(default=0, description="1-based index of the verification round.")
     passed: bool = Field(default=False, description="True when the concept passes verification.")
-    summary: str = Field(default="", description="Short natural-language verdict of the verification.")
-    blocking_issues: List[str] = Field(
+    issue_summaries: List[str] = Field(
         default_factory=list,
-        description="Blocking issues identified during verification that require correction.",
+        description="Concise descriptions of the issues or gaps identified during verification.",
     )
-    improvement_suggestions: List[str] = Field(
-        default_factory=list,
-        description="Concrete suggestions that the solver should address when correcting the draft.",
+    diagnostics: Optional[str] = Field(
+        default=None,
+        description="Optional diagnostic notes providing evidence, persona-specific context, or traceability.",
     )
 
 

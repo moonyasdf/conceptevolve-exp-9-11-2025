@@ -98,20 +98,25 @@ class StubEmbeddingClient:
         return [0.0] * 768
 
 
-class StubIdeaGenerator:
-    def generate_initial_concept(self, problem_description: str, generation: int):
+class StubSolverAgent:
+    def __init__(self):
+        self.calls = 0
+        self.responses: List[Tuple[Optional[str], Optional[str], List[str]]] = []
+
+    def generate_initial_concept(self, problem_description: str, generation: int, model_cfg=None, use_cache=True):
         return None
 
-    def mutate_or_crossover(self, parent, inspirations, generation, problem_description):
+    def mutate_or_crossover(self, parent, inspirations, generation, problem_description, model_cfg=None, meta_recommendations=None):
         return None
 
-    def refine(self, concept, critiques, addressed_points, problem_description):
+    def refine(self, concept, critiques, addressed_points, problem_description, model_cfg=None):
         return concept.description, []
-
-
-class StubConceptCritic:
-    def run(self, concept, problem_description):
-        return []
+    
+    def correct(self, concept, report, problem_description, model_cfg=None, persona=None):
+        self.calls += 1
+        if self.responses:
+            return self.responses.pop(0)
+        return concept.title, concept.description, []
 
 
 class StubConceptEvaluator:
@@ -147,19 +152,19 @@ class StubVerifierAgent:
         self.calls += 1
         if self.reports:
             return self.reports.pop(0)
-        return VerificationReport(round_index=self.calls, passed=True, summary="pass")
+        return VerificationReport(round_index=self.calls, passed=True, issue_summaries=[])
 
 
-class StubSolverAgent:
+class StubSolverAgentForVerification:
     def __init__(self):
         self.calls = 0
-        self.responses: List[Tuple[Optional[str], List[str]]] = []
+        self.responses: List[Tuple[Optional[str], Optional[str], List[str]]] = []
 
-    def correct(self, concept, report, problem_description, model_cfg=None):
+    def correct(self, concept, report, problem_description, model_cfg=None, persona=None):
         self.calls += 1
         if self.responses:
             return self.responses.pop(0)
-        return concept.description, []
+        return concept.title, concept.description, []
 
 
 def make_config(tmp_path) -> DictConfig:
@@ -218,14 +223,12 @@ def make_evolution(monkeypatch, tmp_path, initial_concepts=None):
     monkeypatch.setattr("src.evolution.CheckpointManager", StubCheckpointManager)
     monkeypatch.setattr("src.evolution.EmbeddingClient", StubEmbeddingClient)
     monkeypatch.setattr("src.evolution.ConceptIndex", StubConceptIndex)
-    monkeypatch.setattr("src.evolution.IdeaGenerator", StubIdeaGenerator)
-    monkeypatch.setattr("src.evolution.ConceptCritic", StubConceptCritic)
+    monkeypatch.setattr("src.evolution.SolverAgent", solver_factory)
     monkeypatch.setattr("src.evolution.ConceptEvaluator", StubConceptEvaluator)
     monkeypatch.setattr("src.evolution.NoveltyJudge", StubNoveltyJudge)
     monkeypatch.setattr("src.evolution.RequirementsExtractor", StubRequirementsExtractor)
     monkeypatch.setattr("src.evolution.AlignmentValidator", StubAlignmentValidator)
     monkeypatch.setattr("src.evolution.VerifierAgent", verifier_factory)
-    monkeypatch.setattr("src.evolution.SolverAgent", solver_factory)
 
     cfg = make_config(tmp_path)
     evo = ConceptEvolution("Problema", cfg)
@@ -296,10 +299,10 @@ def test_verification_loop_handles_fail_then_pass(monkeypatch, tmp_path):
     concept = AlgorithmicConcept(title="Test", description="initial draft")
 
     verifier.reports = [
-        VerificationReport(round_index=0, passed=False, summary="fail", blocking_issues=["issue"]),
-        VerificationReport(round_index=0, passed=True, summary="pass"),
+        VerificationReport(round_index=0, passed=False, issue_summaries=["issue"]),
+        VerificationReport(round_index=0, passed=True, issue_summaries=[]),
     ]
-    solver.responses = [("corrected draft", ["Addressed issue"])]
+    solver.responses = [("Updated Title", "corrected draft", ["Addressed issue"])]
 
     evo.cfg.evolution.verification_retries = 3
 
@@ -325,7 +328,7 @@ def test_verification_loop_defaults_to_single_round(monkeypatch, tmp_path):
     if "verification_retries" in evo.cfg.evolution:
         del evo.cfg.evolution["verification_retries"]
 
-    verifier.reports = [VerificationReport(round_index=0, passed=True, summary="ok")]
+    verifier.reports = [VerificationReport(round_index=0, passed=True, issue_summaries=[])]
 
     updated = evo._execute_verification_loop(concept)
 
