@@ -21,7 +21,7 @@ from src.concepts import (
     SystemRequirements,
     VerificationReport,
 )
-from src.llm_utils import query_gemini_structured
+from src.llm_utils import query_structured
 from src.prompts import PromptSampler
 from src.prompts import (
     IDEA_GENERATION_EXAMPLES,
@@ -104,7 +104,7 @@ Propose an algorithmic concept that:
             description: str = Field(description="Detailed technical description (>=200 words)")
         
         # Pass the Hydra model configuration and appropriate temperature to the helper.
-        response = query_gemini_structured(
+        response = query_structured(
             prompt, 
             SYSTEM_MSG_ADAPTIVE_SOLVER, 
             InitialIdea,
@@ -189,7 +189,7 @@ Propose an algorithmic concept that:
             description: str
 
         # Structured response ensures mutated concepts have the same interface as fresh seeds.
-        response = query_gemini_structured(
+        response = query_structured(
             prompt,
             SYSTEM_MSG_ADAPTIVE_SOLVER,
             MutatedIdea,
@@ -279,7 +279,7 @@ Propose an algorithmic concept that:
             newly_addressed_points: List[str] = Field(description="Critique points resolved in this refinement")
         
         # Pass the Hydra model configuration and the appropriate temperature.
-        response = query_gemini_structured(
+        response = query_structured(
             prompt, 
             SYSTEM_MSG_REFINEMENT, 
             RefinementOutput,
@@ -373,7 +373,7 @@ Return structured JSON with:
                 description="Bullet list describing the modifications made.",
             )
 
-        result = query_gemini_structured(
+        result = query_structured(
             prompt,
             SYSTEM_MSG_CORRECTOR,
             CorrectionOutput,
@@ -453,7 +453,7 @@ rewarding grounded execution plans.
 """
         
         # Structured evaluation ensures each rubric is returned as a normalized float.
-        return query_gemini_structured(
+        return query_structured(
             prompt, 
             SYSTEM_MSG_EVALUATOR, 
             ConceptScores,
@@ -521,7 +521,7 @@ Do these two concepts represent the same fundamental idea?
 """
         
         # Structured decision keeps novelty filtering machine-readable for the FAISS index manager.
-        return query_gemini_structured(
+        return query_structured(
             prompt, 
             SYSTEM_MSG_NOVELTY_JUDGE, 
             NoveltyDecision,
@@ -582,7 +582,7 @@ Be specific and technical. Avoid generic phrases like "needs a GPU"; prefer
 """
         
         # Structured extraction returns normalized component lists for scheduling and build planning.
-        return query_gemini_structured(
+        return query_structured(
             prompt, 
             "You are an AI systems architect specialising in extracting technical requirements.", 
             SystemRequirements,
@@ -670,7 +670,7 @@ Return JSON with keys:
             explanation: str
 
         # Use a low, fixed temperature for deterministic alignment scoring.
-        result = query_gemini_structured(
+        result = query_structured(
             prompt,
             SYSTEM_MSG_ALIGNMENT,
             AlignmentResult,
@@ -757,7 +757,7 @@ Return structured JSON with:
                 description="Optional diagnostic notes providing evidence or persona-specific context.",
             )
 
-        result = query_gemini_structured(
+        result = query_structured(
             prompt,
             SYSTEM_MSG_TECHNICAL_VERIFIER,
             VerificationPayload,

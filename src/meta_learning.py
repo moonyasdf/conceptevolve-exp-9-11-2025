@@ -8,7 +8,7 @@ from typing import List, Optional, Tuple
 from omegaconf import DictConfig
 
 from src.concepts import AlgorithmicConcept
-from src.llm_utils import query_gemini_unstructured
+from src.llm_utils import query_text
 from src.prompts_meta import (
     META_STEP1_SYSTEM_MSG,
     META_STEP1_USER_MSG,
@@ -120,7 +120,7 @@ class MetaSummarizer:
             prompt = META_STEP1_USER_MSG.format(
                 concept_summary=construct_concept_summary_for_meta(concept)
             )
-            summary = query_gemini_unstructured(
+            summary = query_text(
                 prompt,
                 META_STEP1_SYSTEM_MSG,
                 self.model_cfg,
@@ -139,7 +139,7 @@ class MetaSummarizer:
             previous_insights=self.meta_scratch_pad or "None.",
             best_concept_info=construct_concept_summary_for_meta(best_concept) if best_concept else "None.",
         )
-        insights = query_gemini_unstructured(
+        insights = query_text(
             prompt,
             META_STEP2_SYSTEM_MSG,
             self.model_cfg,
@@ -157,7 +157,7 @@ class MetaSummarizer:
             max_recommendations=self.max_recommendations,
             best_concept_info=construct_concept_summary_for_meta(best_concept) if best_concept else "None.",
         )
-        recommendations = query_gemini_unstructured(
+        recommendations = query_text(
             prompt,
             META_STEP3_SYSTEM_MSG,
             self.model_cfg,

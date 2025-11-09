@@ -42,8 +42,11 @@ def main(cfg: DictConfig) -> None:
     print("\n📊 Experiment configuration:")
     print(OmegaConf.to_yaml(cfg))
 
-    # Ensure a Gemini client is ready before any agent runs.
-    app_config.get_client()
+    # Configure the model from Hydra config and initialize the appropriate provider client.
+    app_config.configure_model(cfg.model)
+    provider = getattr(cfg.model, "provider", "gemini")
+    print(f"🔧 Initializing {provider.upper()} client...")
+    app_config.get_client(provider)
 
     problem_description = read_file_content(cfg.problem_file)
     if not problem_description:
