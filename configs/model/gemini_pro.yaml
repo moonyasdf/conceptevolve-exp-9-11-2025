@@ -1,6 +1,17 @@
 # Gemini model configuration
+provider: "gemini"
 name: "gemini-2.5-pro"
+
+# Provider-specific defaults
+gemini_model: "gemini-2.5-pro"
+openai_model: "grok-code-fast-1"
+base_url: "https://agentrouter.org/v1"
 embedding_model: "text-embedding-004"
+
+# Structured output knobs
+use_json_schema: true
+response_mime_type: "application/json"
+openai_response_format: "json_object"
 
 # Task-specific temperatures
 temp_generation: 1.0
@@ -8,6 +19,6 @@ temp_evaluation: 0.3
 temp_critique: 0.5
 temp_refinement: 0.7
 
-# Thinking configuration
+# Thinking configuration (Gemini-specific)
 use_thinking: true
 thinking_budget: -1  # -1 enables dynamic thinking
