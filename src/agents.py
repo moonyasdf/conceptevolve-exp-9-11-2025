@@ -28,22 +28,57 @@ from src.prompts import (
     SYSTEM_MSG_ADAPTIVE_SOLVER,
     SYSTEM_MSG_TECHNICAL_VERIFIER,
     SYSTEM_MSG_CORRECTOR,
-    SYSTEM_MSG_EVALUATOR,
-    SYSTEM_MSG_REFINEMENT,
-    SYSTEM_MSG_ALIGNMENT,
-    SYSTEM_MSG_NOVELTY_JUDGE,
 )
-from src.config import model_config
+
+EVALUATOR_SYSTEM_PROMPT = """You are a program committee member scoring concepts
+from 1.0 to 10.0 on four axes:
+
+**Novelty (40%)** – From "established idea" to "never-before-seen insight".
+**Potential (40%)** – From "unlikely to beat baselines" to "could redefine the field".
+**Sophistication (10%)** – From "trivial" to "technically intricate and well integrated".
+**Feasibility (10%)** – From "not currently buildable" to "achievable with standard resources".
+
+Prioritise bold creativity even if feasibility is moderate.
+"""
+
+ALIGNMENT_SYSTEM_PROMPT = """You are an impartial alignment examiner verifying
+that the proposal truly solves the original problem.
+
+Score each axis from 0.0 to 10.0:
+1. coverage_score – How completely does it address every explicit requirement?
+2. scope_fidelity_score – Does it stay within scope without drifting?
+3. directness_score – Is it a direct solution versus an indirect assistive tool?
+
+Compute alignment_score = mean of the three scores and set is_aligned = true
+when alignment_score ≥ 6.0. Provide a brief, specific explanation.
+"""
+
+NOVELTY_SYSTEM_PROMPT = """You are an expert in NLP semantic similarity.
+Determine whether two algorithm descriptions represent the same idea.
+
+**Consider the same idea (is_novel = false) when:**
+- Core algorithm is identical despite wording differences.
+- Main components are the same with only superficial tweaks.
+- One description is merely more detailed than the other.
+
+**Consider them different (is_novel = true) when:**
+- Architectures or mechanisms are fundamentally distinct.
+- Additional non-trivial components change the approach.
+- The combination of techniques creates a new workflow.
+
+Return a structured response with `is_novel` and a concise explanation.
+"""
+
 
 class SolverAgent:
-    """Produce seed, mutated, corrected, and refined algorithmic concepts via Gemini prompts.
+    """Produce seed, mutated, and corrected algorithmic concepts via Gemini prompts.
 
     The solver agent is responsible for the generative side of the pipeline. It
     bootstraps first-generation ideas with few-shot exemplars, performs
-    mutation/crossover against prior concepts, rewrites descriptions after
-    critiques, and corrects concepts based on verification feedback. Each stage
-    relies on structured Gemini responses that can be promoted directly to
-    :class:`AlgorithmicConcept` objects for downstream agents.
+    mutation/crossover against prior concepts, and corrects concepts based on
+    verification feedback. Each stage relies on structured Gemini responses that
+    can be promoted directly to :class:`AlgorithmicConcept` objects for
+    downstream agents.
     """
 
     def __init__(self):
@@ -207,92 +242,6 @@ Propose an algorithmic concept that:
             )
         return None
 
-    def refine(
-        self, 
-        concept: AlgorithmicConcept,
-        all_critiques: List[str], 
-        addressed_points: List[str], 
-        problem_description: str,
-        model_cfg: DictConfig  # Hydra model configuration for LLM calls
-    ) -> Tuple[str, List[str]]:
-        """Refine an existing concept using accumulated critiques and history.
-
-        The refinement prompt threads together the current draft, every critique
-        the concept has received, and a list of previously addressed issues.  By
-        requesting a structured ``RefinementOutput`` schema, Gemini must produce
-        both a fully rewritten description and a list of critique points tackled
-        in the current iteration.  The caller merges ``newly_addressed_points``
-        into ``addressed_points`` to drive multi-round refinement loops.
-
-        Args:
-            concept: The concept whose description is being rewritten.
-            all_critiques: Chronological critiques sourced from
-                :class:`ConceptCritic`.
-            addressed_points: Critique snippets already resolved in prior loops.
-            problem_description: Original user prompt for context anchoring.
-
-        Returns:
-            A tuple containing the refined description and an updated list of
-            addressed critique points.
-        """
-        # Track which critiques are already resolved so Gemini can prioritize remaining gaps.
-        addressed_summary = "\n- ".join(addressed_points) if addressed_points else "None yet"
-        all_critiques_text = "\n\n---\n\n".join([
-            f"**Critique Round {i+1}:**\n{c}"
-            for i, c in enumerate(all_critiques)
-        ])
-        prompt = f"""
-### 🎯 ORIGINAL PROBLEM
-{problem_description}
-
-### 📄 CURRENT DRAFT
-**{concept.title}**
-{concept.description}
-
-### 🔍 CRITIQUE HISTORY
-{all_critiques_text}
-
-### ✅ POINTS ALREADY ADDRESSED
-{addressed_summary}
-
-### 📋 REFINEMENT TASK
-1. Identify which critiques remain unresolved.
-2. Rewrite the description to:
-   - Resolve the outstanding critiques with concrete technical solutions.
-   - Preserve and strengthen improvements already made.
-   - Maintain the original creative insight.
-   - Add any missing implementation detail.
-
-3. Example of specificity:
-   - ❌ "We will optimise runtime."
-   - ✅ "Introduce an LRU cache with adaptive TTL based on query frequency, reducing lookups from O(n) to O(1)."
-
-**IMPORTANT:** The refined description must replace the previous one entirely while keeping the innovative core.
-
-**Output format:**
-- refined_description: Fully rewritten description.
-- newly_addressed_points: Bullet list of critiques resolved in this refinement.
-"""
-
-        class RefinementOutput(BaseModel):
-            refined_description: str = Field(description="Complete refined description")
-            newly_addressed_points: List[str] = Field(description="Critique points resolved in this refinement")
-        
-        # Pass the Hydra model configuration and the appropriate temperature.
-        response = query_structured(
-            prompt, 
-            SYSTEM_MSG_REFINEMENT, 
-            RefinementOutput,
-            model_cfg=model_cfg,
-            temperature=model_cfg.temp_refinement
-        )
-        
-        if response:
-            new_addressed = addressed_points + response.newly_addressed_points
-            return response.refined_description, new_addressed
-        
-        return concept.description, addressed_points
-
     def correct(
         self,
         concept: AlgorithmicConcept,
@@ -300,14 +249,14 @@ Propose an algorithmic concept that:
         problem_description: str,
         model_cfg: DictConfig,
         persona: Optional[str] = None,
-    ) -> Tuple[Optional[str], Optional[str], List[str]]:
+    ) -> Optional[AlgorithmicConcept]:
         """Produce an updated concept that addresses verification blockers.
         
         This method consumes verification feedback from the VerifierAgent and
         produces a revised concept description that resolves all blocking issues
-        while preserving the core creative insight. Unlike refine(), which works
-        with free-form critiques, correct() operates on structured VerificationReport
-        data with explicit issue summaries and diagnostics.
+        while preserving the core creative insight. Unlike the legacy refine()
+        pathway, correct() operates on structured VerificationReport data with
+        explicit issue summaries and diagnostics.
         
         Args:
             concept: The concept whose description needs correction.
@@ -317,7 +266,8 @@ Propose an algorithmic concept that:
             persona: Optional override to force a specific correction persona.
             
         Returns:
-            A tuple containing the corrected title, corrected description, and list of applied fixes.
+            An updated :class:`AlgorithmicConcept` with the applied corrections, or ``None`` when
+            no revision could be produced.
         """
         issues_section = "\n".join(f"- {item}" for item in report.issue_summaries) or "- None"
         diagnostics_section = report.diagnostics or "No additional diagnostics provided."
@@ -382,9 +332,36 @@ Return structured JSON with:
         )
 
         if not result or not result.description:
-            return None, None, []
+            return None
 
-        return result.title, result.description, list(result.change_log or [])
+        if result.title and result.title.strip():
+            concept.title = result.title
+
+        if result.description and result.description.strip():
+            if concept.description != result.description:
+                concept.description = result.description
+                if (
+                    not concept.draft_history
+                    or concept.draft_history[-1] != result.description
+                ):
+                    concept.draft_history.append(result.description)
+
+        change_log = list(result.change_log or [])
+        if change_log:
+            if concept.verification_reports:
+                latest_report = concept.verification_reports[-1]
+                applied = "\n".join(f"- {entry}" for entry in change_log)
+                if latest_report.diagnostics:
+                    latest_report.diagnostics = (
+                        f"{latest_report.diagnostics}\n\nApplied fixes:\n{applied}"
+                    )
+                else:
+                    latest_report.diagnostics = f"Applied fixes:\n{applied}"
+            print("  🔧 Correction change log:")
+            for item in change_log:
+                print(f"    - {item}")
+
+        return concept
 
 
 class ConceptEvaluator:
@@ -454,11 +431,11 @@ rewarding grounded execution plans.
         
         # Structured evaluation ensures each rubric is returned as a normalized float.
         return query_structured(
-            prompt, 
-            SYSTEM_MSG_EVALUATOR, 
+            prompt,
+            EVALUATOR_SYSTEM_PROMPT,
             ConceptScores,
             model_cfg=model_cfg,
-            temperature=model_cfg.temp_evaluation
+            temperature=model_cfg.temp_evaluation,
         )
 
 class NoveltyJudge:
@@ -522,11 +499,11 @@ Do these two concepts represent the same fundamental idea?
         
         # Structured decision keeps novelty filtering machine-readable for the FAISS index manager.
         return query_structured(
-            prompt, 
-            SYSTEM_MSG_NOVELTY_JUDGE, 
+            prompt,
+            NOVELTY_SYSTEM_PROMPT,
             NoveltyDecision,
             model_cfg=model_cfg,
-            temperature=0.3
+            temperature=0.3,
         )
 
 class RequirementsExtractor:
@@ -672,7 +649,7 @@ Return JSON with keys:
         # Use a low, fixed temperature for deterministic alignment scoring.
         result = query_structured(
             prompt,
-            SYSTEM_MSG_ALIGNMENT,
+            ALIGNMENT_SYSTEM_PROMPT,
             AlignmentResult,
             model_cfg=model_cfg,
             temperature=0.3,

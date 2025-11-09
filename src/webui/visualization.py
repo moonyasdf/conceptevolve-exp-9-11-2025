@@ -62,7 +62,7 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
                 for row in rows:
                     concept_dict = dict(row)
                     # Deserialize JSON-encoded fields.
-                    for key in ['draft_history', 'critique_history', 'inspiration_ids', 'embedding', 'scores', 'system_requirements']:
+                    for key in ['draft_history', 'verification_reports', 'inspiration_ids', 'embedding', 'scores', 'system_requirements']:
                         if key in concept_dict and isinstance(concept_dict[key], str):
                             try:
                                 concept_dict[key] = json.loads(concept_dict[key])

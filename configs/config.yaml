@@ -2,7 +2,10 @@ defaults:
   - _self_
   - evolution: default
   - database: default
-  - model: gemini_pro
+  - model: gemini_2.5_pro
+
+# Enable interactive provider/model selection at startup
+interactive_setup: false
 
 # Output directory for Hydra runs
 output_dir: "outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}"

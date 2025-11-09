@@ -108,15 +108,24 @@ class StubSolverAgent:
 
     def mutate_or_crossover(self, parent, inspirations, generation, problem_description, model_cfg=None, meta_recommendations=None):
         return None
-
-    def refine(self, concept, critiques, addressed_points, problem_description, model_cfg=None):
-        return concept.description, []
     
     def correct(self, concept, report, problem_description, model_cfg=None, persona=None):
         self.calls += 1
         if self.responses:
-            return self.responses.pop(0)
-        return concept.title, concept.description, []
+            title, description, change_log = self.responses.pop(0)
+            if title:
+                concept.title = title
+            if description and description != concept.description:
+                concept.description = description
+                if not concept.draft_history or concept.draft_history[-1] != description:
+                    concept.draft_history.append(description)
+            if change_log and concept.verification_reports:
+                applied = "\n".join(f"- {item}" for item in change_log)
+                latest = concept.verification_reports[-1]
+                latest.diagnostics = (
+                    f"Applied fixes:\n{applied}" if not latest.diagnostics else f"{latest.diagnostics}\n\nApplied fixes:\n{applied}"
+                )
+        return concept
 
 
 class StubConceptEvaluator:
@@ -163,8 +172,20 @@ class StubSolverAgentForVerification:
     def correct(self, concept, report, problem_description, model_cfg=None, persona=None):
         self.calls += 1
         if self.responses:
-            return self.responses.pop(0)
-        return concept.title, concept.description, []
+            title, description, change_log = self.responses.pop(0)
+            if title:
+                concept.title = title
+            if description and description != concept.description:
+                concept.description = description
+                if not concept.draft_history or concept.draft_history[-1] != description:
+                    concept.draft_history.append(description)
+            if change_log and concept.verification_reports:
+                applied = "\n".join(f"- {item}" for item in change_log)
+                latest = concept.verification_reports[-1]
+                latest.diagnostics = (
+                    f"Applied fixes:\n{applied}" if not latest.diagnostics else f"{latest.diagnostics}\n\nApplied fixes:\n{applied}"
+                )
+        return concept
 
 
 def make_config(tmp_path) -> DictConfig:
@@ -315,7 +336,8 @@ def test_verification_loop_handles_fail_then_pass(monkeypatch, tmp_path):
     assert updated.verification_reports[0].round_index == 1
     assert updated.verification_reports[1].passed is True
     assert len(updated.draft_history) == 2
-    assert any("Addressed issue" in entry for entry in updated.critique_history)
+    first_report = updated.verification_reports[0]
+    assert first_report.diagnostics and "Addressed issue" in first_report.diagnostics
 
 
 def test_verification_loop_defaults_to_single_round(monkeypatch, tmp_path):

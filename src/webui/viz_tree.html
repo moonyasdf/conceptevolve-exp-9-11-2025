@@ -123,13 +123,27 @@
             `;
         }
 
-        let critiquesHtml = '<h4>Critique History</h4>';
-        if (nodeData.critique_history && nodeData.critique_history.length > 0) {
-            nodeData.critique_history.forEach((critique, i) => {
-                critiquesHtml += `<h5>Round ${i + 1}</h5><pre>${escapeHtml(critique)}</pre>`;
+        let verificationHtml = '<h4>Verification Reports</h4>';
+        if (nodeData.verification_reports && nodeData.verification_reports.length > 0) {
+            nodeData.verification_reports.forEach((report, i) => {
+                const round = report.round_index || i + 1;
+                const verdict = report.passed ? 'PASS' : 'FAIL';
+                verificationHtml += `<h5>Round ${round} — ${verdict}</h5>`;
+
+                const issues = Array.isArray(report.issue_summaries) ? report.issue_summaries : [];
+                if (issues.length > 0) {
+                    const items = issues.map(issue => `<li>${escapeHtml(issue)}</li>`).join('');
+                    verificationHtml += `<p><strong>Issues:</strong></p><ul>${items}</ul>`;
+                } else {
+                    verificationHtml += '<p><strong>Issues:</strong> None</p>';
+                }
+
+                if (report.diagnostics) {
+                    verificationHtml += `<p><strong>Diagnostics:</strong></p><pre>${escapeHtml(report.diagnostics)}</pre>`;
+                }
             });
         } else {
-            critiquesHtml += '<p>No critiques yet.</p>';
+            verificationHtml += '<p>No verification reports yet.</p>';
         }
 
         panel.innerHTML = `
@@ -139,12 +153,15 @@
             <h4>Description</h4>
             <div style="white-space: pre-wrap; background: #f5f5f5; padding: 10px; border-radius: 5px;">${escapeHtml(nodeData.description)}</div>
             ${scoresHtml}
-            ${critiquesHtml}
+            ${verificationHtml}
         `;
     }
 
     function escapeHtml(text) {
-        return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        if (text === undefined || text === null) {
+            return '';
+        }
+        return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
 
     function fetchData() {

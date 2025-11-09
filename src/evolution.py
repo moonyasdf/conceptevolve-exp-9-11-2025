@@ -7,7 +7,6 @@ import os
 import math
 import logging
 import threading
-import contextlib
 import concurrent.futures
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
@@ -500,130 +499,77 @@ class ConceptEvolution:
             return False
         return True
 
-    def _get_verification_rounds(self) -> int:
-        configured = getattr(self.cfg.evolution, "verification_retries", None)
-        if configured is None:
-            return 1
+    def _execute_verification_loop(self, draft_concept: AlgorithmicConcept) -> AlgorithmicConcept:
+        """
+        Manages the full Verify-then-Correct loop for a single concept.
+        This function replaces the old _refine_concept logic.
+        """
+        current_concept = draft_concept
+
+        if current_concept.description and (
+            not current_concept.draft_history
+            or current_concept.draft_history[-1] != current_concept.description
+        ):
+            current_concept.draft_history.append(current_concept.description)
+
+        retries = getattr(self.cfg.evolution, "verification_retries", 1)
         try:
-            rounds = int(configured)
+            total_rounds = max(1, int(retries))
         except (TypeError, ValueError):
             logger.warning(
                 "Invalid value for evolution.verification_retries (%s). Falling back to 1 round.",
-                configured,
+                retries,
             )
-            return 1
-        if rounds < 1:
-            logger.warning(
-                "evolution.verification_retries must be >= 1 (received %s). Defaulting to 1.",
-                rounds,
+            total_rounds = 1
+
+        for i in range(total_rounds):
+            print(f"  🕵️ Verification Round {i + 1}/{total_rounds}...")
+
+            report = self.verifier.verify(
+                concept=current_concept,
+                problem_description=self.problem_description,
+                model_cfg=self.cfg.model,
             )
-            return 1
-        return rounds
 
-    def _execute_verification_loop(self, draft_concept: AlgorithmicConcept) -> AlgorithmicConcept:
-        total_rounds = self._get_verification_rounds()
-        if not draft_concept.draft_history or draft_concept.draft_history[-1] != draft_concept.description:
-            draft_concept.draft_history.append(draft_concept.description)
+            if report and not isinstance(report, VerificationReport):
+                try:
+                    report = VerificationReport.model_validate(report)
+                except Exception:
+                    report = None
 
-        for round_idx in range(1, total_rounds + 1):
-            print(f"Verification Round {round_idx}/{total_rounds}")
-            try:
-                report = self.verifier.verify(
-                    draft_concept,
-                    self.problem_description,
-                    model_cfg=self.cfg.model,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Verification agent failed for concept %s in round %s: %s",
-                    draft_concept.id,
-                    round_idx,
-                    exc,
-                )
+            if report and report.passed:
+                report.round_index = i + 1
+                print("  ✅ Verification Passed. Concept is sound and accepted.")
+                current_concept.verification_reports.append(report)
+                return current_concept
+
+            if not report:
+                print("  ⚠️ Verifier failed to produce a report. Assuming unsound.")
                 report = VerificationReport(
-                    round_index=round_idx,
+                    round_index=i + 1,
                     passed=False,
-                    issue_summaries=[f"Agent error: {exc}"],
-                    diagnostics=f"Verification error occurred: {exc}",
+                    issue_summaries=["Verifier agent failed to return a report."],
                 )
             else:
-                if not isinstance(report, VerificationReport):
-                    logger.warning(
-                        "Verifier returned unexpected payload for concept %s in round %s: %r",
-                        draft_concept.id,
-                        round_idx,
-                        report,
-                    )
-                    if isinstance(report, dict):
-                        with contextlib.suppress(Exception):
-                            report = VerificationReport.model_validate(report)  # type: ignore[attr-defined]
-                    if not isinstance(report, VerificationReport):
-                        report = VerificationReport(
-                            round_index=round_idx,
-                            passed=False,
-                            issue_summaries=["Verification agent returned a non-VerificationReport payload."],
-                            diagnostics="Fallback verification report generated by ConceptEvolution.",
-                        )
-                report.round_index = round_idx
+                report.round_index = i + 1
 
-            draft_concept.verification_reports.append(report)
+            issue_count = len(report.issue_summaries or [])
+            print(f"  ❌ Verification Failed with {issue_count} findings. Proceeding to correction.")
+            current_concept.verification_reports.append(report)
 
-            verdict_label = "PASS" if report.passed else "FAIL"
-            critique_lines = [f"Verification Round {round_idx}: {verdict_label}"]
-            if report.issue_summaries:
-                critique_lines.append("Issues identified:")
-                critique_lines.extend(f"- {issue}" for issue in report.issue_summaries)
-            if report.diagnostics:
-                critique_lines.append("Diagnostics:")
-                critique_lines.append(str(report.diagnostics))
-            draft_concept.critique_history.append("\n".join(critique_lines))
+            corrected_concept = self.solver.correct(
+                concept=current_concept,
+                report=report,
+                problem_description=self.problem_description,
+                model_cfg=self.cfg.model,
+            )
 
-            if report.passed:
-                print("Verification Passed")
-                break
+            if not corrected_concept:
+                raise GenerationSkipped("Solver failed to produce a correction.")
 
-            print("Verification Failed")
-            if round_idx == total_rounds:
-                break
+            current_concept = corrected_concept
 
-            try:
-                corrected_title, corrected_description, change_log = self.solver.correct(
-                    draft_concept,
-                    report,
-                    self.problem_description,
-                    model_cfg=self.cfg.model,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Solver failed to correct concept %s in round %s: %s",
-                    draft_concept.id,
-                    round_idx,
-                    exc,
-                )
-                break
-
-            change_log = list(change_log or [])
-            if not corrected_description:
-                logger.warning(
-                    "Solver returned no correction for concept %s in round %s.",
-                    draft_concept.id,
-                    round_idx,
-                )
-                break
-
-            if corrected_title and corrected_title != draft_concept.title:
-                draft_concept.title = corrected_title
-
-            if corrected_description != draft_concept.description:
-                draft_concept.description = corrected_description
-                draft_concept.draft_history.append(corrected_description)
-
-            if change_log:
-                fixes_entry = ["Applied fixes:"]
-                fixes_entry.extend(f"- {item}" for item in change_log)
-                draft_concept.critique_history.append("\n".join(fixes_entry))
-
-        return draft_concept
+        raise GenerationSkipped("Concept failed to achieve a 'SOUND' verdict after all verification retries.")
 
     def _execute_generation_task(self, generation: int) -> AlgorithmicConcept:
         parent, inspirations, _ = self._safe_sample()

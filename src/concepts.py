@@ -79,9 +79,8 @@ class AlgorithmicConcept(BaseModel):
     title: str = Field(default="")
     description: str = Field(default="")
 
-    # Refinement history
+    # Revision history
     draft_history: List[str] = Field(default_factory=list)
-    critique_history: List[str] = Field(default_factory=list)
     verification_reports: List[VerificationReport] = Field(default_factory=list)
 
     # Extracted outputs

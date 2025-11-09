@@ -42,6 +42,23 @@ def main(cfg: DictConfig) -> None:
     print("\n📊 Experiment configuration:")
     print(OmegaConf.to_yaml(cfg))
 
+    if getattr(cfg, "interactive_setup", False):
+        print("\n--- Interactive Setup ---")
+        default_provider = getattr(cfg.model, "provider", "gemini")
+        provider_input = input(f"Select LLM provider [{default_provider}]: ").strip().lower()
+        provider_choice = provider_input or default_provider
+        OmegaConf.update(cfg, "model.provider", provider_choice, force_add=True)
+
+        default_model_name = getattr(cfg.model, "name", "")
+        model_input = input(f"Enter model name [{default_model_name}]: ").strip()
+        model_choice = model_input or default_model_name
+        if model_choice:
+            OmegaConf.update(cfg, "model.name", model_choice, force_add=True)
+
+        print("-------------------------\n")
+        print("Updated configuration:")
+        print(OmegaConf.to_yaml(cfg.model))
+
     # Configure the model from Hydra config and initialize the appropriate provider client.
     app_config.configure_model(cfg.model)
     provider = getattr(cfg.model, "provider", "gemini")
