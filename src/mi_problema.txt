@@ -1,0 +1,55 @@
+PROBLEM: Design a Second-Generation Multi-Hop RAG System Through Algorithmic Innovation
+
+CONTEXT AND DISCOVERED LIMITATIONS:
+
+First-generation RAG systems exhibit a critical failure mode revealed through systematic testing. When presented with triplets of text fragments where Fragment A is the base, Fragment B shares high lexical overlap with A but expresses opposite semantic meaning, and Fragment C uses entirely different vocabulary but preserves identical semantic meaning, state-of-the-art embedding models consistently score similarity(A,B) higher than similarity(A,C). This is not a minor edge case. Leading models on the MTEB leaderboard achieve 0-5% accuracy on this evaluation, effectively random performance. This represents a fundamental architectural vulnerability: current systems optimize for surface-level pattern matching rather than semantic invariance.
+
+This limitation cascades catastrophically in multi-document retrieval scenarios. In benchmarks like MuSiQue, where answering a single query requires synthesizing information across 2-4 different documents while ignoring lexically similar but semantically irrelevant distractor documents, this weakness becomes fatal. The system must not only retrieve relevant fragments but construct valid reasoning chains across document boundaries while rejecting spurious connections based on keyword overlap.
+
+The core pathology is Knowledge Fragmentation coupled with Representation Poverty. We destroy document structure through chunking, then rely on embeddings that conflate lexical similarity with semantic equivalence to reconstruct coherence at query time. Current solutions attempt to patch this through query-time compensation: decomposing queries, reranking results, or deploying agentic LLM loops. These are symptomatic treatments. The disease is architectural.
+
+MANDATORY CONSTRAINTS:
+
+You must design a system using only algorithmic and structural innovation. No fine-tuning, training, or model adaptation is permitted. You have access to: general-purpose LLMs for text generation and reasoning, pre-trained embedding models, rerankers, and standard computational primitives. The intelligence must emerge from how you compose these tools, not from specializing them.
+
+Embeddings are a tool for approximate nearest neighbor search, not the endpoint of your solution. Your architecture must demonstrate mechanisms that operate on top of, around, or in correction of embedding-based retrieval to achieve semantic fidelity.
+
+The system must scale to corpora exceeding any single model context window and operate efficiently without requiring exhaustive document re-processing per query.
+
+ARCHITECTURAL REQUIREMENTS:
+
+1. INDEXING PHASE DESIGN:
+
+Specify the complete transformation pipeline from raw documents to queryable representation. What data structures do you construct beyond a flat vector index? How do you encode: hierarchical document structure, positional relationships between fragments, semantic dependencies that span non-contiguous sections, cross-document relationships that represent genuine conceptual connections versus lexical coincidence?
+
+Your representation must make implicit knowledge explicit. If understanding fragment F_i requires information from fragment F_j where j is not equal to i plus or minus 1, your data structure must capture this dependency during indexing, not discover it through query-time heroics.
+
+Justify why your representation is robust to the lexical trap problem. If two fragments discuss the same concept using different terminology, how does your structure ensure they are retrievable as a coherent unit? If two fragments share vocabulary but discuss unrelated concepts, how does your structure prevent their spurious association?
+
+2. RETRIEVAL ALGORITHM SPECIFICATION:
+
+Provide a concrete, executable algorithm for query processing. This must be a deterministic procedure with defined steps, not a natural language prompt to an LLM agent.
+
+The algorithm must demonstrate mechanical enforcement of connected reasoning. In a two-hop query requiring information from document D1 to answer a question whose subject is mentioned in document D2, show precisely how your algorithm uses the structures from the indexing phase to traverse this connection. The connection must be structurally enforced by your data representation and algorithm, not emergent from an LLM deciding to "think about related information."
+
+Address the efficiency-quality tradeoff. Naive graph traversal or exhaustive LLM-based verification of all fragment pairs is computationally prohibitive. How does your algorithm achieve sub-quadratic complexity while maintaining reasoning chain integrity?
+
+If you employ LLM calls during retrieval, each call must have a specific, constrained purpose with concrete inputs and outputs. Explain what question each LLM invocation answers and how its output feeds into subsequent algorithmic steps.
+
+3. SEMANTIC INVARIANCE MECHANISM:
+
+Given the empirical failure of embeddings to distinguish lexical mimicry from semantic equivalence, your architecture must include an explicit mechanism to achieve semantic robustness. This might involve: augmentation strategies that generate semantically equivalent but syntactically diverse representations, multi-view encoding schemes, dynamic query refinement based on retrieved context, validation procedures that verify semantic coherence beyond embedding similarity, or graph structures that encode semantic relationships through something more reliable than extracted entity triplets.
+
+Explain how this mechanism operates without model training. If you generate paraphrases or alternative representations, specify the prompting strategy and how outputs are utilized. If you construct a graph, specify edge weight computation that does not rely on brittle entity extraction.
+
+4. MUSIQUE BENCHMARK MAPPING:
+
+Explicitly address how your architecture handles: Connected Reasoning where answer synthesis requires chaining facts from separate documents, Distractor Resilience where documents exist that share topic keywords with the question but contain irrelevant or contradictory information, Unanswerable Questions where the corpus lacks sufficient information and the system must recognize this rather than hallucinate.
+
+For each capability, trace through your algorithm showing which specific components and design decisions provide that capability.
+
+5. FAILURE MODE ANALYSIS:
+
+Identify the single most likely failure mode of your proposed system. Under what conditions does your architecture degrade? What type of query or document structure would cause your core mechanisms to produce incorrect results?
+
+Propose a concrete mitigation. This must be a specific algorithmic or structural modification, not a vague statement about "using a better model" or "adding more validation."

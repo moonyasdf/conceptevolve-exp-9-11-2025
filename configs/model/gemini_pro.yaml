@@ -1,0 +1,13 @@
+# Gemini model configuration
+name: "gemini-2.5-pro"
+embedding_model: "text-embedding-004"
+
+# Task-specific temperatures
+temp_generation: 1.0
+temp_evaluation: 0.3
+temp_critique: 0.5
+temp_refinement: 0.7
+
+# Thinking configuration
+use_thinking: true
+thinking_budget: -1  # -1 enables dynamic thinking

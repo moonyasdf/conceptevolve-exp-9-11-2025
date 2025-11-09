@@ -1,0 +1,8 @@
+# Core evolution loop parameters
+num_generations: 10
+population_size: 20
+max_parallel_workers: 4  # Number of concepts to process concurrently
+novelty_threshold: 0.95
+refinement_steps: 2
+checkpoint_interval: 5
+meta_interval: 5
