@@ -4,5 +4,6 @@ population_size: 20
 max_parallel_workers: 4  # Number of concepts to process concurrently
 novelty_threshold: 0.95
 refinement_steps: 2
+verification_retries: 2  # Number of verification attempts (minimum 1)
 checkpoint_interval: 5
 meta_interval: 5
