@@ -22,8 +22,10 @@ from src.agents import (
     NoveltyJudge,
     RequirementsExtractor,
     AlignmentValidator,
+    SolverAgent,
+    VerifierAgent,
 )
-from src.concepts import AlgorithmicConcept, ConceptScores
+from src.concepts import AlgorithmicConcept, ConceptScores, VerificationReport
 from src.llm_utils import EmbeddingClient
 from src.vector_index import ConceptIndex
 from src.scoring import AdaptiveScoring
@@ -49,6 +51,8 @@ class ConceptEvolution:
         self.novelty_judge = NoveltyJudge()
         self.req_extractor = RequirementsExtractor()
         self.alignment_validator = AlignmentValidator()
+        self.verifier = VerifierAgent()
+        self.solver = SolverAgent()
 
         # MEJORA: Pasamos el nombre del modelo de embedding desde la config de Hydra
         self.embedding_client = EmbeddingClient(model_name=cfg.model.embedding_model)
@@ -499,25 +503,124 @@ class ConceptEvolution:
             return False
         return True
 
-    def _refine_concept(self, draft_concept: AlgorithmicConcept) -> AlgorithmicConcept:
-        current_description = draft_concept.description
-        draft_concept.draft_history.append(current_description)
-        addressed_points = []
-        for i in range(self.cfg.evolution.refinement_steps):
-            print(
-                f"  🔍 Refinement round {i + 1}/{self.cfg.evolution.refinement_steps}..."
+    def _get_verification_rounds(self) -> int:
+        configured = getattr(self.cfg.evolution, "verification_retries", None)
+        if configured is None:
+            return 1
+        try:
+            rounds = int(configured)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid value for evolution.verification_retries (%s). Falling back to 1 round.",
+                configured,
             )
-            critiques = self.critic.run(draft_concept, self.problem_description, model_cfg=self.cfg.model)
-            draft_concept.critique_history.append(critiques)
-            current_description, addressed_points = self.idea_generator.refine(
-                draft_concept,
-                draft_concept.critique_history,
-                addressed_points,
-                self.problem_description,
-                model_cfg=self.cfg.model
+            return 1
+        if rounds < 1:
+            logger.warning(
+                "evolution.verification_retries must be >= 1 (received %s). Defaulting to 1.",
+                rounds,
             )
-            draft_concept.description = current_description
-            draft_concept.draft_history.append(current_description)
+            return 1
+        return rounds
+
+    def _execute_verification_loop(self, draft_concept: AlgorithmicConcept) -> AlgorithmicConcept:
+        total_rounds = self._get_verification_rounds()
+        if not draft_concept.draft_history or draft_concept.draft_history[-1] != draft_concept.description:
+            draft_concept.draft_history.append(draft_concept.description)
+
+        for round_idx in range(1, total_rounds + 1):
+            print(f"Verification Round {round_idx}/{total_rounds}")
+            try:
+                report = self.verifier.verify(
+                    draft_concept,
+                    self.problem_description,
+                    model_cfg=self.cfg.model,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Verification agent failed for concept %s in round %s: %s",
+                    draft_concept.id,
+                    round_idx,
+                    exc,
+                )
+                report = VerificationReport(
+                    round_index=round_idx,
+                    passed=False,
+                    summary=f"Verification error: {exc}",
+                    blocking_issues=[f"Agent error: {exc}"],
+                )
+            else:
+                if not isinstance(report, VerificationReport):
+                    logger.warning(
+                        "Verifier returned unexpected payload for concept %s in round %s: %r",
+                        draft_concept.id,
+                        round_idx,
+                        report,
+                    )
+                    report = VerificationReport(
+                        round_index=round_idx,
+                        passed=False,
+                        summary="Verifier returned an unexpected payload.",
+                        blocking_issues=["Verification agent returned a non-VerificationReport payload."],
+                    )
+                else:
+                    report.round_index = round_idx
+
+            draft_concept.verification_reports.append(report)
+
+            critique_lines = [
+                f"Verification Round {round_idx}: {report.summary or 'No summary provided.'}"
+            ]
+            if report.blocking_issues:
+                critique_lines.append("Blocking issues:")
+                critique_lines.extend(f"- {issue}" for issue in report.blocking_issues)
+            if report.improvement_suggestions:
+                critique_lines.append("Suggestions:")
+                critique_lines.extend(f"- {suggestion}" for suggestion in report.improvement_suggestions)
+            draft_concept.critique_history.append("\n".join(critique_lines))
+
+            if report.passed:
+                print("Verification Passed")
+                break
+
+            print("Verification Failed")
+            if round_idx == total_rounds:
+                break
+
+            try:
+                corrected_description, applied_fixes = self.solver.correct(
+                    draft_concept,
+                    report,
+                    self.problem_description,
+                    model_cfg=self.cfg.model,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Solver failed to correct concept %s in round %s: %s",
+                    draft_concept.id,
+                    round_idx,
+                    exc,
+                )
+                break
+
+            applied_fixes = list(applied_fixes or [])
+            if not corrected_description:
+                logger.warning(
+                    "Solver returned no correction for concept %s in round %s.",
+                    draft_concept.id,
+                    round_idx,
+                )
+                break
+
+            if corrected_description != draft_concept.description:
+                draft_concept.description = corrected_description
+                draft_concept.draft_history.append(corrected_description)
+
+            if applied_fixes:
+                fixes_entry = ["Applied fixes:"]
+                fixes_entry.extend(f"- {fix}" for fix in applied_fixes)
+                draft_concept.critique_history.append("\n".join(fixes_entry))
+
         return draft_concept
 
     def _execute_generation_task(self, generation: int) -> AlgorithmicConcept:
@@ -548,7 +651,7 @@ class ConceptEvolution:
             raise GenerationSkipped(f"Mutation returned no concept for generation {generation}.")
 
         new_concept.generation = generation
-        new_concept = self._refine_concept(new_concept)
+        new_concept = self._execute_verification_loop(new_concept)
         new_concept.embedding = self._get_embedding(new_concept.get_full_prompt_text())
 
         if not self._check_novelty_with_faiss(new_concept):

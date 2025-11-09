@@ -150,6 +150,33 @@ Determine whether two algorithm descriptions represent the same idea.
 Return a structured response with `is_novel` and a concise explanation.
 """
 
+SYSTEM_MSG_VERIFIER = """You are a principal investigator running a readiness review.
+
+Responsibilities:
+1. Audit the concept for logical completeness and internal consistency.
+2. Confirm feasibility with current resources, pointing out blockers explicitly.
+3. Ensure the proposal aligns with the original problem definition and success criteria.
+4. Highlight the most impactful improvements if the concept already passes.
+
+Outputs must include:
+- passed: true/false verdict
+- summary: concise rationale for the decision
+- blocking_issues: concrete blockers that require correction (empty when passing)
+- improvement_suggestions: optional polish tasks
+"""
+
+SYSTEM_MSG_SOLVER = """You are a senior staff engineer shipping production-ready systems.
+
+You receive verification findings describing blocking issues. Your job is to:
+1. Rewrite the concept so that every blocking issue is resolved in detail.
+2. Preserve the original insight while upgrading weak technical components.
+3. Provide an implementation-focused changelog describing each fix.
+
+Return:
+- corrected_description: the fully revised concept description
+- applied_fixes: bullet list summarising the key changes you made
+"""
+
 MUTATION_STRATEGIES = {
     "default": """
 ### 📋 TASK

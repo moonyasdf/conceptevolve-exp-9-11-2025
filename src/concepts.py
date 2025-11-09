@@ -54,6 +54,22 @@ class SystemRequirements(BaseModel):
     )
 
 
+class VerificationReport(BaseModel):
+    """Structured outcome emitted by the verifier agent for each round."""
+
+    round_index: int = Field(default=0, description="1-based index of the verification round.")
+    passed: bool = Field(default=False, description="True when the concept passes verification.")
+    summary: str = Field(default="", description="Short natural-language verdict of the verification.")
+    blocking_issues: List[str] = Field(
+        default_factory=list,
+        description="Blocking issues identified during verification that require correction.",
+    )
+    improvement_suggestions: List[str] = Field(
+        default_factory=list,
+        description="Concrete suggestions that the solver should address when correcting the draft.",
+    )
+
+
 # --- Primary data structure stored in the population ---
 
 
@@ -67,6 +83,7 @@ class AlgorithmicConcept(BaseModel):
     # Refinement history
     draft_history: List[str] = Field(default_factory=list)
     critique_history: List[str] = Field(default_factory=list)
+    verification_reports: List[VerificationReport] = Field(default_factory=list)
 
     # Extracted outputs
     system_requirements: SystemRequirements = Field(default_factory=SystemRequirements)

@@ -13,7 +13,13 @@ the evolution loop.
 from pydantic import BaseModel, Field
 from typing import List, Optional, Tuple
 from omegaconf import DictConfig
-from src.concepts import AlgorithmicConcept, ConceptScores, NoveltyDecision, SystemRequirements
+from src.concepts import (
+    AlgorithmicConcept,
+    ConceptScores,
+    NoveltyDecision,
+    SystemRequirements,
+    VerificationReport,
+)
 from src.llm_utils import query_gemini_structured, query_gemini_unstructured
 from src.prompts import PromptSampler
 from src.prompts import (
@@ -23,7 +29,9 @@ from src.prompts import (
     SYSTEM_MSG_EVALUATOR,
     SYSTEM_MSG_REFINEMENT,
     SYSTEM_MSG_ALIGNMENT,
-    SYSTEM_MSG_NOVELTY_JUDGE
+    SYSTEM_MSG_NOVELTY_JUDGE,
+    SYSTEM_MSG_SOLVER,
+    SYSTEM_MSG_VERIFIER,
 )
 from src.config import model_config
 
@@ -636,17 +644,143 @@ Return JSON with keys:
             alignment_score: float
             is_aligned: bool
             explanation: str
-        
+
         # Use a low, fixed temperature for deterministic alignment scoring.
         result = query_gemini_structured(
-            prompt, 
-            SYSTEM_MSG_ALIGNMENT, 
+            prompt,
+            SYSTEM_MSG_ALIGNMENT,
             AlignmentResult,
             model_cfg=model_cfg,
-            temperature=0.3
+            temperature=0.3,
         )
-        
+
         if result:
             return result.is_aligned, result.explanation, result.alignment_score
-        
+
         return True, "Validation error - accepted by default", 6.0
+
+
+class VerifierAgent:
+    """Gatekeeper that determines whether a concept is ready to progress."""
+
+    def verify(
+        self,
+        concept: AlgorithmicConcept,
+        problem_description: str,
+        model_cfg: DictConfig,
+    ) -> VerificationReport:
+        """Return a structured verification verdict for the provided concept."""
+
+        prompt = f"""
+### 🎯 ORIGINAL PROBLEM
+{problem_description}
+
+### 📄 CONCEPT UNDER VERIFICATION
+**{concept.title}**
+{concept.description}
+
+### 🕵️ TASK
+Evaluate whether the concept is ready for execution. Provide a concise pass/fail
+verdict, enumerate blocking issues that require correction, and suggest the most
+impactful improvements.
+
+Focus on feasibility, logical coherence, and alignment with the original
+problem. If the concept passes, keep `blocking_issues` empty and use
+`improvement_suggestions` for optional polish.
+"""
+
+        class VerificationPayload(BaseModel):
+            passed: bool = Field(description="True when the concept is ready to proceed.")
+            summary: str = Field(description="Short explanation of the decision.")
+            blocking_issues: List[str] = Field(
+                default_factory=list,
+                description="Blocking problems preventing approval.",
+            )
+            improvement_suggestions: List[str] = Field(
+                default_factory=list,
+                description="Optional follow-up improvements.",
+            )
+
+        result = query_gemini_structured(
+            prompt,
+            SYSTEM_MSG_VERIFIER,
+            VerificationPayload,
+            model_cfg=model_cfg,
+            temperature=model_cfg.temp_critique,
+        )
+
+        if not result:
+            return VerificationReport(
+                passed=False,
+                summary="Verifier did not return a structured response.",
+                blocking_issues=["No verification response received."],
+            )
+
+        return VerificationReport(
+            passed=bool(result.passed),
+            summary=result.summary.strip(),
+            blocking_issues=list(result.blocking_issues or []),
+            improvement_suggestions=list(result.improvement_suggestions or []),
+        )
+
+
+class SolverAgent:
+    """Agent responsible for correcting drafts after failed verification."""
+
+    def correct(
+        self,
+        concept: AlgorithmicConcept,
+        report: VerificationReport,
+        problem_description: str,
+        model_cfg: DictConfig,
+    ) -> Tuple[Optional[str], List[str]]:
+        """Produce an updated description that addresses verification blockers."""
+
+        blocking_section = "\n".join(f"- {item}" for item in report.blocking_issues) or "- None"
+        improvements_section = "\n".join(f"- {item}" for item in report.improvement_suggestions) or "- None"
+        prompt = f"""
+### 🎯 ORIGINAL PROBLEM
+{problem_description}
+
+### 📄 CURRENT DRAFT
+**{concept.title}**
+{concept.description}
+
+### ❌ VERIFICATION RESULT
+Summary: {report.summary or "No summary provided."}
+
+Blocking issues:
+{blocking_section}
+
+Suggested improvements:
+{improvements_section}
+
+### 🛠️ CORRECTION TASK
+Write a new, fully-specified description that resolves every blocking issue while
+preserving the concept's core insight. Provide a bullet changelog explaining the
+fixes you applied.
+
+Return structured JSON with:
+- corrected_description: the rewritten concept
+- applied_fixes: bullet list describing the key changes
+"""
+
+        class CorrectionOutput(BaseModel):
+            corrected_description: str = Field(description="Rewritten concept description.")
+            applied_fixes: List[str] = Field(
+                default_factory=list,
+                description="Bullet list describing the modifications made.",
+            )
+
+        result = query_gemini_structured(
+            prompt,
+            SYSTEM_MSG_SOLVER,
+            CorrectionOutput,
+            model_cfg=model_cfg,
+            temperature=model_cfg.temp_refinement,
+        )
+
+        if not result or not result.corrected_description:
+            return None, []
+
+        return result.corrected_description, list(result.applied_fixes or [])

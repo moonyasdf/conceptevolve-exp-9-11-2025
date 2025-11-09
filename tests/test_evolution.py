@@ -1,8 +1,8 @@
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from omegaconf import DictConfig, OmegaConf
 
-from src.concepts import AlgorithmicConcept, ConceptScores
+from src.concepts import AlgorithmicConcept, ConceptScores, VerificationReport
 from src.evolution import ConceptEvolution
 
 
@@ -138,6 +138,30 @@ class StubAlignmentValidator:
         return True, None, 10.0
 
 
+class StubVerifierAgent:
+    def __init__(self):
+        self.calls = 0
+        self.reports: List[VerificationReport] = []
+
+    def verify(self, concept, problem_description, model_cfg=None):
+        self.calls += 1
+        if self.reports:
+            return self.reports.pop(0)
+        return VerificationReport(round_index=self.calls, passed=True, summary="pass")
+
+
+class StubSolverAgent:
+    def __init__(self):
+        self.calls = 0
+        self.responses: List[Tuple[Optional[str], List[str]]] = []
+
+    def correct(self, concept, report, problem_description, model_cfg=None):
+        self.calls += 1
+        if self.responses:
+            return self.responses.pop(0)
+        return concept.description, []
+
+
 def make_config(tmp_path) -> DictConfig:
     return OmegaConf.create(
         {
@@ -147,6 +171,7 @@ def make_config(tmp_path) -> DictConfig:
                 "num_generations": 1,
                 "novelty_threshold": 0.9,
                 "refinement_steps": 0,
+                "verification_retries": 2,
                 "checkpoint_interval": 5,
             },
             "database": {
@@ -179,6 +204,16 @@ def make_evolution(monkeypatch, tmp_path, initial_concepts=None):
         created["db"] = db
         return db
 
+    def verifier_factory():
+        stub = StubVerifierAgent()
+        created["verifier"] = stub
+        return stub
+
+    def solver_factory():
+        stub = StubSolverAgent()
+        created["solver"] = stub
+        return stub
+
     monkeypatch.setattr("src.evolution.ConceptDatabase", db_factory)
     monkeypatch.setattr("src.evolution.CheckpointManager", StubCheckpointManager)
     monkeypatch.setattr("src.evolution.EmbeddingClient", StubEmbeddingClient)
@@ -189,10 +224,15 @@ def make_evolution(monkeypatch, tmp_path, initial_concepts=None):
     monkeypatch.setattr("src.evolution.NoveltyJudge", StubNoveltyJudge)
     monkeypatch.setattr("src.evolution.RequirementsExtractor", StubRequirementsExtractor)
     monkeypatch.setattr("src.evolution.AlignmentValidator", StubAlignmentValidator)
+    monkeypatch.setattr("src.evolution.VerifierAgent", verifier_factory)
+    monkeypatch.setattr("src.evolution.SolverAgent", solver_factory)
 
     cfg = make_config(tmp_path)
     evo = ConceptEvolution("Problema", cfg)
-    return evo, created.get("db")
+    created.setdefault("verifier", evo.verifier)
+    created.setdefault("solver", evo.solver)
+    created.setdefault("db", created.get("db"))
+    return evo, created
 
 
 def test_concept_index_uses_configured_embedding_dimension(monkeypatch, tmp_path):
@@ -246,3 +286,51 @@ def test_check_novelty_handles_faiss_errors(monkeypatch, tmp_path):
     draft.embedding = [0.1] * evo.embedding_dimension
 
     assert evo._check_novelty_with_faiss(draft) is True
+
+
+def test_verification_loop_handles_fail_then_pass(monkeypatch, tmp_path):
+    evo, created = make_evolution(monkeypatch, tmp_path)
+    verifier: StubVerifierAgent = created["verifier"]
+    solver: StubSolverAgent = created["solver"]
+
+    concept = AlgorithmicConcept(title="Test", description="initial draft")
+
+    verifier.reports = [
+        VerificationReport(round_index=0, passed=False, summary="fail", blocking_issues=["issue"]),
+        VerificationReport(round_index=0, passed=True, summary="pass"),
+    ]
+    solver.responses = [("corrected draft", ["Addressed issue"])]
+
+    evo.cfg.evolution.verification_retries = 3
+
+    updated = evo._execute_verification_loop(concept)
+
+    assert verifier.calls == 2
+    assert solver.calls == 1
+    assert updated.description == "corrected draft"
+    assert len(updated.verification_reports) == 2
+    assert updated.verification_reports[0].round_index == 1
+    assert updated.verification_reports[1].passed is True
+    assert len(updated.draft_history) == 2
+    assert any("Addressed issue" in entry for entry in updated.critique_history)
+
+
+def test_verification_loop_defaults_to_single_round(monkeypatch, tmp_path):
+    evo, created = make_evolution(monkeypatch, tmp_path)
+    verifier: StubVerifierAgent = created["verifier"]
+    solver: StubSolverAgent = created["solver"]
+
+    concept = AlgorithmicConcept(title="Test", description="initial draft")
+
+    if "verification_retries" in evo.cfg.evolution:
+        del evo.cfg.evolution["verification_retries"]
+
+    verifier.reports = [VerificationReport(round_index=0, passed=True, summary="ok")]
+
+    updated = evo._execute_verification_loop(concept)
+
+    assert verifier.calls == 1
+    assert solver.calls == 0
+    assert len(updated.verification_reports) == 1
+    assert updated.verification_reports[0].passed is True
+    assert len(updated.draft_history) == 1
