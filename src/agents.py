@@ -10,6 +10,7 @@ the evolution loop.
 # File: src/agents.py
 # NOTE: Includes enhanced prompts, contextual refinement, and alignment validation.
 
+import contextlib
 from pydantic import BaseModel, Field
 from typing import List, Optional, Tuple
 from omegaconf import DictConfig
@@ -20,30 +21,29 @@ from src.concepts import (
     SystemRequirements,
     VerificationReport,
 )
-from src.llm_utils import query_gemini_structured, query_gemini_unstructured
+from src.llm_utils import query_gemini_structured
 from src.prompts import PromptSampler
 from src.prompts import (
     IDEA_GENERATION_EXAMPLES,
-    SYSTEM_MSG_IDEA_GENERATOR,
-    SYSTEM_MSG_CRITIC,
+    SYSTEM_MSG_ADAPTIVE_SOLVER,
+    SYSTEM_MSG_TECHNICAL_VERIFIER,
+    SYSTEM_MSG_CORRECTOR,
     SYSTEM_MSG_EVALUATOR,
     SYSTEM_MSG_REFINEMENT,
     SYSTEM_MSG_ALIGNMENT,
     SYSTEM_MSG_NOVELTY_JUDGE,
-    SYSTEM_MSG_SOLVER,
-    SYSTEM_MSG_VERIFIER,
 )
 from src.config import model_config
 
-class IdeaGenerator:
-    """Produce seed, mutated, and refined algorithmic concepts via Gemini prompts.
+class SolverAgent:
+    """Produce seed, mutated, corrected, and refined algorithmic concepts via Gemini prompts.
 
-    The generator is responsible for the creative side of the pipeline.  It
+    The solver agent is responsible for the generative side of the pipeline. It
     bootstraps first-generation ideas with few-shot exemplars, performs
-    mutation/crossover against prior concepts, and rewrites descriptions after
-    critiques.  Each stage relies on structured Gemini responses that can be
-    promoted directly to :class:`AlgorithmicConcept` objects for downstream
-    agents.
+    mutation/crossover against prior concepts, rewrites descriptions after
+    critiques, and corrects concepts based on verification feedback. Each stage
+    relies on structured Gemini responses that can be promoted directly to
+    :class:`AlgorithmicConcept` objects for downstream agents.
     """
 
     def __init__(self):
@@ -106,7 +106,7 @@ Propose an algorithmic concept that:
         # Pass the Hydra model configuration and appropriate temperature to the helper.
         response = query_gemini_structured(
             prompt, 
-            SYSTEM_MSG_IDEA_GENERATOR, 
+            SYSTEM_MSG_ADAPTIVE_SOLVER, 
             InitialIdea,
             model_cfg=model_cfg,
             temperature=model_cfg.temp_generation,
@@ -191,7 +191,7 @@ Propose an algorithmic concept that:
         # Structured response ensures mutated concepts have the same interface as fresh seeds.
         response = query_gemini_structured(
             prompt,
-            SYSTEM_MSG_IDEA_GENERATOR,
+            SYSTEM_MSG_ADAPTIVE_SOLVER,
             MutatedIdea,
             model_cfg=model_cfg,
             temperature=model_cfg.temp_generation
@@ -293,75 +293,99 @@ Propose an algorithmic concept that:
         
         return concept.description, addressed_points
 
-class ConceptCritic:
-    """Deliver structured critiques that drive the refinement loop.
-
-    The critic asks Gemini for an unstructured but highly prescriptive review of
-    the concept, covering alignment, logic, feasibility, novelty, and potential
-    failure modes.  Its textual feedback is fed to :meth:`IdeaGenerator.refine`
-    so the generator can resolve outstanding issues in subsequent iterations.
-    """
-    
-    def run(self, concept: AlgorithmicConcept, problem_description: str, model_cfg: DictConfig) -> str:
-        """Request a detailed critique anchored to the original problem statement.
-
-        The prompt enumerates five lenses—alignment, logical consistency,
-        viability, novelty, and implementation risks—and instructs Gemini to
-        produce bullet-point guidance.  Because the output is observational text
-        rather than a structured schema, ``query_gemini_unstructured`` is used
-        here.  The raw critique is appended to the concept's history for later
-        refinements.
-
+    def correct(
+        self,
+        concept: AlgorithmicConcept,
+        report: VerificationReport,
+        problem_description: str,
+        model_cfg: DictConfig,
+        persona: Optional[str] = None,
+    ) -> Tuple[Optional[str], Optional[str], List[str]]:
+        """Produce an updated concept that addresses verification blockers.
+        
+        This method consumes verification feedback from the VerifierAgent and
+        produces a revised concept description that resolves all blocking issues
+        while preserving the core creative insight. Unlike refine(), which works
+        with free-form critiques, correct() operates on structured VerificationReport
+        data with explicit issue summaries and diagnostics.
+        
         Args:
-            concept: Candidate concept being stress-tested.
-            problem_description: Original problem description used to validate
-                alignment.
-
+            concept: The concept whose description needs correction.
+            report: Structured VerificationReport containing issue summaries and diagnostics.
+            problem_description: Original problem statement for context anchoring.
+            model_cfg: Hydra model configuration for LLM calls.
+            persona: Optional override to force a specific correction persona.
+            
         Returns:
-            A markdown-compatible critique string.
+            A tuple containing the corrected title, corrected description, and list of applied fixes.
         """
+        issues_section = "\n".join(f"- {item}" for item in report.issue_summaries) or "- None"
+        diagnostics_section = report.diagnostics or "No additional diagnostics provided."
+
+        persona_pref = persona
+        if persona_pref is None and model_cfg is not None:
+            try:
+                persona_pref = getattr(model_cfg, "solver_persona")
+            except AttributeError:
+                persona_pref = None
+            if not persona_pref:
+                with contextlib.suppress(Exception):
+                    persona_pref = model_cfg.get("solver_persona")  # type: ignore[attr-defined]
+
+        persona_block = ""
+        if persona_pref:
+            persona_block = f"\n### 🎭 PERSONA\nAdopt the vantage point of a {persona_pref.strip()}. Use this perspective to prioritise the corrections.\n"
+        
         prompt = f"""
 ### 🎯 ORIGINAL PROBLEM
 {problem_description}
 
-### 📄 PROPOSAL TO CRITIQUE
+### 📄 CURRENT DRAFT
 **{concept.title}**
 {concept.description}
 
-### 📋 TASK
-Deliver a detailed critique that covers:
+### ❌ VERIFICATION RESULT
+Passed: {report.passed}
+Round: {report.round_index}
 
-**1. Problem Alignment**
-- Does it address every stated requirement?
-- Does it drift away from the requested scope?
+Issues identified:
+{issues_section}
 
-**2. Logical Soundness**
-- Highlight reasoning gaps or unsupported steps.
-- Flag contradictions or missing justifications.
+Diagnostics:
+{diagnostics_section}
+{persona_block}
+### 🛠️ CORRECTION TASK
+Write a new, fully-specified concept that resolves every identified issue while
+preserving the concept's core insight. Provide a bullet changelog explaining the
+fixes you applied.
 
-**3. Technical Feasibility**
-- Identify unrealistic assumptions or resource demands.
-- Describe compute, data, or engineering bottlenecks.
-
-**4. Genuine Novelty**
-- Explain whether the idea is truly original or a superficial rebrand.
-- Note when combinations of known techniques are insufficiently novel.
-
-**5. Implementation Risks**
-- Call out likely failure modes, edge cases, or hidden complexities.
-
-**FORMAT:** Bullet list with precise technical reasoning.
-
-**BE SPECIFIC:** Instead of "might have scalability issues", write "The streaming retriever requires O(n²) graph updates per query, which is infeasible beyond 10M documents".
+Return structured JSON with:
+- title: the updated, technically precise concept title
+- description: the fully revised concept description
+- change_log: bullet list summarising the key changes
 """
-        
-        # Unstructured call preserves free-form markdown critiques for human legibility.
-        return query_gemini_unstructured(
-            prompt, 
-            SYSTEM_MSG_CRITIC,
+
+        class CorrectionOutput(BaseModel):
+            title: str = Field(description="Updated concept title after correction.")
+            description: str = Field(description="Rewritten concept description.")
+            change_log: List[str] = Field(
+                default_factory=list,
+                description="Bullet list describing the modifications made.",
+            )
+
+        result = query_gemini_structured(
+            prompt,
+            SYSTEM_MSG_CORRECTOR,
+            CorrectionOutput,
             model_cfg=model_cfg,
-            temperature=model_cfg.temp_critique
+            temperature=model_cfg.temp_refinement,
         )
+
+        if not result or not result.description:
+            return None, None, []
+
+        return result.title, result.description, list(result.change_log or [])
+
 
 class ConceptEvaluator:
     """Score concepts across novelty, potential impact, sophistication, and viability.
@@ -668,8 +692,38 @@ class VerifierAgent:
         concept: AlgorithmicConcept,
         problem_description: str,
         model_cfg: DictConfig,
+        persona: Optional[str] = None,
     ) -> VerificationReport:
-        """Return a structured verification verdict for the provided concept."""
+        """Return a structured verification verdict for the provided concept.
+        
+        This method performs analytical verification WITHOUT generating solutions.
+        It examines feasibility, logical coherence, and alignment with the original
+        problem statement, then returns a structured VerificationReport with
+        issue summaries and optional diagnostics.
+        
+        Args:
+            concept: The concept under verification.
+            problem_description: Original problem statement for context.
+            model_cfg: Hydra model configuration for LLM calls.
+            persona: Optional override to force a specific verifier persona (mathematician, architect, programmer).
+            
+        Returns:
+            A VerificationReport containing the pass/fail verdict, issue summaries, and diagnostics.
+        """
+        
+        persona_pref = persona
+        if persona_pref is None and model_cfg is not None:
+            try:
+                persona_pref = getattr(model_cfg, "verifier_persona")
+            except AttributeError:
+                persona_pref = None
+            if not persona_pref:
+                with contextlib.suppress(Exception):
+                    persona_pref = model_cfg.get("verifier_persona")  # type: ignore[attr-defined]
+
+        persona_block = ""
+        if persona_pref:
+            persona_block = f"\n### 🎭 PERSONA\nExamine this concept from the vantage point of a {persona_pref.strip()}. Use this perspective when identifying issues and forming your verdict.\n"
 
         prompt = f"""
 ### 🎯 ORIGINAL PROBLEM
@@ -678,32 +732,34 @@ class VerifierAgent:
 ### 📄 CONCEPT UNDER VERIFICATION
 **{concept.title}**
 {concept.description}
-
+{persona_block}
 ### 🕵️ TASK
 Evaluate whether the concept is ready for execution. Provide a concise pass/fail
-verdict, enumerate blocking issues that require correction, and suggest the most
-impactful improvements.
+verdict, enumerate issues that require correction, and provide diagnostic evidence.
 
 Focus on feasibility, logical coherence, and alignment with the original
-problem. If the concept passes, keep `blocking_issues` empty and use
-`improvement_suggestions` for optional polish.
+problem. You MUST NOT propose solutions - only identify gaps and provide diagnostic notes.
+
+Return structured JSON with:
+- passed: boolean indicating whether the concept is ready to proceed
+- issue_summaries: list of concise issue descriptions (empty if passing)
+- diagnostics: optional string providing evidence, context, or traceability notes
 """
 
         class VerificationPayload(BaseModel):
             passed: bool = Field(description="True when the concept is ready to proceed.")
-            summary: str = Field(description="Short explanation of the decision.")
-            blocking_issues: List[str] = Field(
+            issue_summaries: List[str] = Field(
                 default_factory=list,
-                description="Blocking problems preventing approval.",
+                description="Concise descriptions of issues or gaps (empty if passing).",
             )
-            improvement_suggestions: List[str] = Field(
-                default_factory=list,
-                description="Optional follow-up improvements.",
+            diagnostics: Optional[str] = Field(
+                default=None,
+                description="Optional diagnostic notes providing evidence or persona-specific context.",
             )
 
         result = query_gemini_structured(
             prompt,
-            SYSTEM_MSG_VERIFIER,
+            SYSTEM_MSG_TECHNICAL_VERIFIER,
             VerificationPayload,
             model_cfg=model_cfg,
             temperature=model_cfg.temp_critique,
@@ -712,75 +768,12 @@ problem. If the concept passes, keep `blocking_issues` empty and use
         if not result:
             return VerificationReport(
                 passed=False,
-                summary="Verifier did not return a structured response.",
-                blocking_issues=["No verification response received."],
+                issue_summaries=["No verification response received."],
+                diagnostics="The verifier did not return a structured response.",
             )
 
         return VerificationReport(
             passed=bool(result.passed),
-            summary=result.summary.strip(),
-            blocking_issues=list(result.blocking_issues or []),
-            improvement_suggestions=list(result.improvement_suggestions or []),
+            issue_summaries=list(result.issue_summaries or []),
+            diagnostics=result.diagnostics,
         )
-
-
-class SolverAgent:
-    """Agent responsible for correcting drafts after failed verification."""
-
-    def correct(
-        self,
-        concept: AlgorithmicConcept,
-        report: VerificationReport,
-        problem_description: str,
-        model_cfg: DictConfig,
-    ) -> Tuple[Optional[str], List[str]]:
-        """Produce an updated description that addresses verification blockers."""
-
-        blocking_section = "\n".join(f"- {item}" for item in report.blocking_issues) or "- None"
-        improvements_section = "\n".join(f"- {item}" for item in report.improvement_suggestions) or "- None"
-        prompt = f"""
-### 🎯 ORIGINAL PROBLEM
-{problem_description}
-
-### 📄 CURRENT DRAFT
-**{concept.title}**
-{concept.description}
-
-### ❌ VERIFICATION RESULT
-Summary: {report.summary or "No summary provided."}
-
-Blocking issues:
-{blocking_section}
-
-Suggested improvements:
-{improvements_section}
-
-### 🛠️ CORRECTION TASK
-Write a new, fully-specified description that resolves every blocking issue while
-preserving the concept's core insight. Provide a bullet changelog explaining the
-fixes you applied.
-
-Return structured JSON with:
-- corrected_description: the rewritten concept
-- applied_fixes: bullet list describing the key changes
-"""
-
-        class CorrectionOutput(BaseModel):
-            corrected_description: str = Field(description="Rewritten concept description.")
-            applied_fixes: List[str] = Field(
-                default_factory=list,
-                description="Bullet list describing the modifications made.",
-            )
-
-        result = query_gemini_structured(
-            prompt,
-            SYSTEM_MSG_SOLVER,
-            CorrectionOutput,
-            model_cfg=model_cfg,
-            temperature=model_cfg.temp_refinement,
-        )
-
-        if not result or not result.corrected_description:
-            return None, []
-
-        return result.corrected_description, list(result.applied_fixes or [])
