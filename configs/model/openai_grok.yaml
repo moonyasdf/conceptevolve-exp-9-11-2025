@@ -1,8 +1,13 @@
 # OpenAI-compatible model configuration (Grok)
 provider: "openai"
 name: "grok-code-fast-1"
-base_url: "https://agentrouter.org/v1"  # OpenAI-compatible base URL
-embedding_model: "text-embedding-004"  # Fallback to Gemini for embeddings
+base_url: "https://agentrouter.org/v1"
+
+# Structured output defaults
+openai_response_format: "json_object"
+
+# Embeddings remain on Gemini for cross-provider compatibility
+embedding_model: "text-embedding-004"
 
 # Task-specific temperatures
 temp_generation: 1.0

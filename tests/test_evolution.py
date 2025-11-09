@@ -196,7 +196,6 @@ def make_config(tmp_path) -> DictConfig:
                 "population_size": 1,
                 "num_generations": 1,
                 "novelty_threshold": 0.9,
-                "refinement_steps": 0,
                 "verification_retries": 2,
                 "checkpoint_interval": 5,
             },

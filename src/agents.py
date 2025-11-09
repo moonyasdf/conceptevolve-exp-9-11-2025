@@ -1,18 +1,18 @@
 """Gemini-powered agent pipeline for evolving algorithmic concepts.
 
 This module orchestrates the end-to-end lifecycle of concept evolution: idea
-creation, critique, refinement, scoring, novelty filtering, requirements
-extraction, and alignment validation.  Each agent wraps a Gemini prompt strategy
-and, where needed, a structured response schema that feeds downstream steps in
-the evolution loop.
+creation, verification, scoring, novelty filtering, requirements extraction, and
+alignment validation. Each agent wraps a Gemini prompt strategy and, where
+needed, a structured response schema that feeds downstream steps in the evolution
+loop.
 """
 
 # File: src/agents.py
-# NOTE: Includes enhanced prompts, contextual refinement, and alignment validation.
+# NOTE: Includes enhanced prompts, contextual correction, and alignment validation.
 
 import contextlib
 from pydantic import BaseModel, Field
-from typing import List, Optional, Tuple
+from typing import List, Optional
 from omegaconf import DictConfig
 from src.concepts import (
     AlgorithmicConcept,
@@ -95,9 +95,9 @@ class SolverAgent:
 
         The prompt concatenates ``IDEA_GENERATION_EXAMPLES`` with the user brief
         and requests a structured ``InitialIdea`` payload containing a title and
-        long-form technical description.  The structured output is promoted to
-        an :class:`AlgorithmicConcept`, providing the root node for downstream
-        critique, scoring, and refinement agents.
+        long-form technical description. The structured output is promoted to an
+        :class:`AlgorithmicConcept`, providing the root node for downstream
+        verification, scoring, and selection agents.
 
         Args:
             problem_description: Natural-language description of the task the
