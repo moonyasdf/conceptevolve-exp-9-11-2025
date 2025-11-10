@@ -1,0 +1,18 @@
+# Gemini 2.5 Pro model configuration
+provider: "gemini"
+name: "gemini-2.5-pro"
+embedding_model: "text-embedding-004"
+
+# Structured output defaults
+use_json_schema: true
+response_mime_type: "application/json"
+
+# Thinking configuration
+use_thinking: true
+thinking_budget: -1  # -1 enables dynamic thinking
+
+# Task-specific temperatures
+temp_generation: 1.0
+temp_evaluation: 0.3
+temp_critique: 0.5
+temp_refinement: 0.7

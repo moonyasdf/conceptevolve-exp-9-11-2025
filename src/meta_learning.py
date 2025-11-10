@@ -34,17 +34,26 @@ def construct_concept_summary_for_meta(concept: AlgorithmicConcept) -> str:
             f"S: {scores.sophistication:.1f}, F: {scores.feasibility:.1f})"
         )
 
-    if concept.critique_history:
-        latest_critique = concept.critique_history[-1]
-        critique_summary = " ".join(latest_critique.split()[:50]) + "..."
+    if concept.verification_reports:
+        latest_report = concept.verification_reports[-1]
+        verdict = "PASS" if latest_report.passed else "FAIL"
+        issues = latest_report.issue_summaries or []
+        issues_summary = "; ".join(issues[:3]) if issues else "No outstanding issues."
+        diagnostics = latest_report.diagnostics.strip() if latest_report.diagnostics else ""
+        details = [f"Round {latest_report.round_index or len(concept.verification_reports)}: {verdict}"]
+        if issues_summary:
+            details.append(f"Issues: {issues_summary}")
+        if diagnostics:
+            details.append(f"Diagnostics: {diagnostics[:200]}")
+        verification_summary = " | ".join(details)
     else:
-        critique_summary = "N/A"
+        verification_summary = "No verification reports available."
 
     return (
         f"**Title:** {concept.title}\n"
         f"**Description:** {concept.description[:400]}...\n"
         f"**Performance:** {score_str}\n"
-        f"**Final Critique Summary:** {critique_summary}"
+        f"**Latest Verification Feedback:** {verification_summary}"
     )
 
 

@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
 from omegaconf import DictConfig, OmegaConf
 
-from src.concepts import AlgorithmicConcept, ConceptScores, SystemRequirements
+from src.concepts import AlgorithmicConcept, ConceptScores, SystemRequirements, VerificationReport
 from .islands import CombinedIslandManager
 from .parents import CombinedParentSelector
 from .inspiration import CombinedContextSelector
@@ -295,6 +295,37 @@ class ConceptDatabase:
         self._schedule_migration = False
         self.last_iteration = self.get_max_generation()
 
+    @staticmethod
+    def _serialize_verification_reports(reports: List[VerificationReport]) -> str:
+        if not reports:
+            return "[]"
+        serialized: List[Dict[str, Any]] = []
+        for report in reports:
+            if isinstance(report, VerificationReport):
+                serialized.append(report.model_dump())
+            elif isinstance(report, dict):
+                serialized.append(report)
+        return json.dumps(serialized)
+
+    @staticmethod
+    def _deserialize_verification_reports(raw: Optional[str]) -> List[VerificationReport]:
+        if not raw:
+            return []
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        reports: List[VerificationReport] = []
+        for item in data:
+            if isinstance(item, VerificationReport):
+                reports.append(item)
+                continue
+            try:
+                reports.append(VerificationReport.model_validate(item))
+            except Exception:
+                continue
+        return reports
+
     def _create_tables(self) -> None:
         self.cursor.execute("PRAGMA journal_mode = WAL;")
         self.cursor.execute("PRAGMA busy_timeout = 30000;")
@@ -305,7 +336,7 @@ class ConceptDatabase:
                 title TEXT,
                 description TEXT,
                 draft_history TEXT,
-                critique_history TEXT,
+                verification_reports TEXT,
                 system_requirements TEXT,
                 generation INTEGER,
                 parent_id TEXT,
@@ -336,7 +367,7 @@ class ConceptDatabase:
             self.cursor.execute(
                 """
                 INSERT OR IGNORE INTO concepts (
-                    id, title, description, draft_history, critique_history,
+                    id, title, description, draft_history, verification_reports,
                     system_requirements, generation, parent_id, inspiration_ids,
                     embedding, scores, combined_score, island_idx, timestamp
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -346,7 +377,7 @@ class ConceptDatabase:
                     concept.title,
                     concept.description,
                     json.dumps(concept.draft_history),
-                    json.dumps(concept.critique_history),
+                    self._serialize_verification_reports(concept.verification_reports),
                     concept.system_requirements.model_dump_json(),
                     concept.generation,
                     concept.parent_id,
@@ -367,7 +398,7 @@ class ConceptDatabase:
             self.cursor.execute(
                 """
                 UPDATE concepts SET
-                    title = ?, description = ?, draft_history = ?, critique_history = ?,
+                    title = ?, description = ?, draft_history = ?, verification_reports = ?,
                     system_requirements = ?, embedding = ?, scores = ?, combined_score = ?
                 WHERE id = ?
                 """,
@@ -375,7 +406,7 @@ class ConceptDatabase:
                     concept.title,
                     concept.description,
                     json.dumps(concept.draft_history),
-                    json.dumps(concept.critique_history),
+                    self._serialize_verification_reports(concept.verification_reports),
                     concept.system_requirements.model_dump_json(),
                     json.dumps(concept.embedding),
                     concept.scores.model_dump_json() if concept.scores else None,
@@ -391,7 +422,9 @@ class ConceptDatabase:
 
         data = dict(row)
         data["draft_history"] = json.loads(row["draft_history"] or "[]")
-        data["critique_history"] = json.loads(row["critique_history"] or "[]")
+        data["verification_reports"] = self._deserialize_verification_reports(
+            row["verification_reports"] if "verification_reports" in row.keys() else None
+        )
         data["system_requirements"] = SystemRequirements.model_validate_json(
             row["system_requirements"] or "{}"
         )

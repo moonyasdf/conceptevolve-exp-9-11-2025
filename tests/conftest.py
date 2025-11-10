@@ -22,7 +22,7 @@ def in_memory_db():
             title TEXT,
             description TEXT,
             draft_history TEXT,
-            critique_history TEXT,
+            verification_reports TEXT,
             system_requirements TEXT,
             generation INTEGER,
             parent_id TEXT,
